@@ -1,0 +1,31 @@
+# Базовые зависимости проекта
+# Конкретные версии будут уточняться по мере разработки
+
+# Backend общие
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+
+# База данных
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.7
+alembic==1.12.1
+
+# Машинное обучение
+ultralytics==8.0.186
+opencv-python==4.8.1.78
+torch==2.0.1
+torchvision==0.15.2
+numpy==1.24.3
+pillow==10.0.1
+
+# Работа с данными
+pandas==2.0.3
+openpyxl==3.1.2
+
+# Картографические API (будет уточнено)
+requests==2.31.0
+
+# Аутентификация
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4

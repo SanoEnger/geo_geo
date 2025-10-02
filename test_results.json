@@ -1,0 +1,11 @@
+{
+  "timestamp": "2025-10-02T12:19:12.726717",
+  "services": {
+    "auth": "unreachable",
+    "cv_processing": "healthy",
+    "photo_upload": "healthy",
+    "geocoding": "healthy",
+    "export": "unreachable"
+  },
+  "overall": "FAIL"
+}

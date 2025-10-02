@@ -1,0 +1,15 @@
+{
+  "timestamp": "2025-10-02T13:36:49.792753",
+  "results": {
+    "api_gateway": "success",
+    "auth": "failed",
+    "cv_processing": "success",
+    "photo_upload": "success",
+    "geocoding": "success"
+  },
+  "summary": {
+    "total": 5,
+    "success": 4,
+    "status": "partial"
+  }
+}
