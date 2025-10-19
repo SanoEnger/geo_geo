@@ -1,9 +1,18 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import os
-import uuid
-from PIL import Image
 import json
+from typing import Optional, Dict, List, Any
+from PIL import Image
+from PIL.ExifTags import TAGS
+import traceback
+
+# 1. Модель для входных данных (должна соответствовать JSON, который отправляет Photo Upload Service)
+class ProcessRequest(BaseModel):
+    file_id: str
+    original_filename: str
+    file_path: str # Путь к файлу на общем томе
 
 app = FastAPI(
     title="CV Processing Service",
@@ -19,95 +28,105 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Папки для хранения
-UPLOAD_DIR = "storage/uploaded_photos/raw"
-PROCESSED_DIR = "storage/uploaded_photos/processed"
+# Папки для хранения (должны соответствовать docker-compose.yml)
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "storage/uploaded_photos/raw")
+PROCESSED_DIR = os.getenv("PROCESSED_DIR", "storage/uploaded_photos/processed")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-# Простой детектор для теста (без YOLO пока)
+# --------------------------------------------------------------------------------------------------
+# Вспомогательные классы (SimpleDetector)
+# --------------------------------------------------------------------------------------------------
+
 class SimpleDetector:
     def __init__(self):
         print("🔄 Простой детектор инициализирован")
     
-    def extract_metadata(self, image_path: str):
+    def extract_metadata(self, image_path: str) -> Dict:
         """Извлечение базовых метаданных"""
         try:
             with Image.open(image_path) as img:
+                file_size = os.path.getsize(image_path) 
                 return {
                     'format': img.format,
                     'size': img.size,
                     'mode': img.mode,
                     'filename': os.path.basename(image_path),
-                    'file_size': os.path.getsize(image_path)
+                    'file_size': file_size,
+                    'exif': self._get_exif_data(img)
                 }
         except Exception as e:
             return {'error': str(e)}
+
+    def _get_exif_data(self, img: Image.Image) -> Dict:
+        """Извлечение EXIF данных"""
+        exif_data = {}
+        try:
+            # 🌟 ИСПРАВЛЕНИЕ: Используем публичный метод getexif()
+            exif = img.getexif() 
+            if exif:
+                for tag, value in exif.items():
+                    decoded = TAGS.get(tag, tag)
+                    exif_data[decoded] = str(value)
+        except Exception:
+            pass
+        return exif_data
     
-    def mock_detect_buildings(self, image_path: str):
+    def mock_detect_buildings(self, file_path: str) -> List[Dict]:
         """Заглушка для детекции зданий"""
-        # В реальной системе здесь будет YOLO
+        # Всегда возвращаем один фиктивный BBOX, как необходимо для продолжения пайплайна
         return [
             {
                 'class': 'building',
                 'confidence': 0.85,
-                'bbox': [100, 100, 300, 300],
-                'center': [200, 200],
-                'area': 15.5
+                # BBOX: [x_min, y_min, x_max, y_max]
+                'bbox': [500, 500, 1500, 1500], 
+                'center': [1000, 1000],
+                'area': 1000000
             }
         ]
 
 detector = SimpleDetector()
 
-@app.get("/")
-async def root():
-    return {
-        "message": "CV Processing Service работает!",
-        "status": "success",
-        "mode": "simple_detector",
-        "endpoints": [
-            "/health",
-            "/process-image",
-            "/model-info"
-        ]
-    }
+# --------------------------------------------------------------------------------------------------
+# Эндпоинты
+# --------------------------------------------------------------------------------------------------
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "cv-processing"}
+    return {"status": "healthy", "service": "cv-processing-service"}
 
-@app.post("/process-image")
-async def process_image(file: UploadFile = File(...)):
-    """Обработка одного изображения (упрощенная версия)"""
+@app.post("/api/process") 
+async def process_photo(request: ProcessRequest):
+    """
+    Обрабатывает загруженный файл: извлекает метаданные и выполняет детекцию зданий.
+    Использует file_path для доступа к файлу на общем томе.
+    """
+    file_path = request.file_path
+    file_id = request.file_id
+    original_filename_safe = request.original_filename
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, 
+            f"Файл не найден на общем томе: {file_path}"
+        )
+
     try:
-        # Валидация файла
-        if not file.content_type.startswith('image/'):
-            raise HTTPException(400, "Файл должен быть изображением")
-        
-        # Сохранение файла
-        file_id = str(uuid.uuid4())
-        file_extension = os.path.splitext(file.filename)[1] or '.jpg'
-        file_path = os.path.join(UPLOAD_DIR, f"{file_id}{file_extension}")
-        
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        # Проверка что файл является валидным изображением
+        # Проверка, что файл является изображением
         try:
             with Image.open(file_path) as img:
-                img.verify()
+                img.verify() 
         except Exception as e:
-            os.remove(file_path)
-            raise HTTPException(400, f"Невалидное изображение: {e}")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Невалидное изображение: {e}")
         
-        print(f"🔄 Обработка изображения: {file.filename}")
+        print(f"🔄 Обработка изображения: {original_filename_safe} ({file_id})")
         
-        # Извлекаем метаданные
+        # 1. Извлекаем метаданные
         metadata = detector.extract_metadata(file_path)
         
-        # Моковая детекция
+        # 2. Моковая детекция
         buildings = detector.mock_detect_buildings(file_path)
         
         result = {
@@ -115,7 +134,7 @@ async def process_image(file: UploadFile = File(...)):
             'buildings_detected': len(buildings),
             'buildings': buildings,
             'file_info': {
-                'original_filename': file.filename,
+                'original_filename': original_filename_safe,
                 'file_id': file_id
             }
         }
@@ -124,20 +143,22 @@ async def process_image(file: UploadFile = File(...)):
         
         return {
             "success": True,
-            "results": result
+            "results": result 
         }
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        raise HTTPException(500, f"Ошибка обработки: {str(e)}")
+        print(f"❌ Непредвиденная ошибка в CV Service: {traceback.format_exc()}")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка обработки: {str(e)}")
 
 @app.get("/model-info")
 async def model_info():
     """Информация о модели"""
     return {
         "model_name": "Simple Detector (Mock)",
-        "status": "YOLO will be integrated in next step",
-        "input_size": "variable",
-        "framework": "Pillow"
+        "status": "Ready",
+        "description": "Используется моковая детекция для тестирования пайплайна."
     }
 
 if __name__ == "__main__":

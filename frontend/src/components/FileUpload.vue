@@ -33,17 +33,15 @@
       <el-button @click="clearFiles">Очистить</el-button>
     </div>
 
-    <!-- Прогресс загрузки -->
     <div v-if="uploadProgress > 0" class="upload-progress">
       <el-progress 
         :percentage="uploadProgress" 
         :status="uploadStatus"
-        :text-inside="true"
-        :stroke-width="20"
+        :format="formatProgress"
       />
-      <div class="progress-info">
-        Загружено: {{ uploadedCount }} из {{ fileList.length }}
-      </div>
+      <p class="progress-text">
+        Обработано: {{ uploadedCount }} из {{ fileList.length }}
+      </p>
     </div>
   </div>
 </template>
@@ -51,25 +49,38 @@
 <script>
 import { UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { photoService } from '@/api/services'
+import { useAppStore } from '@/stores/app'
+import axios from 'axios'
 
 export default {
   name: 'FileUpload',
   components: {
     UploadFilled
   },
+  emits: ['upload-complete', 'photo-processed'],
   data() {
     return {
       fileList: [],
       uploading: false,
       uploadProgress: 0,
       uploadedCount: 0,
-      uploadStatus: null
+      uploadStatus: '', 
+      client: axios.create({
+        baseURL: import.meta.env.VITE_API_BASE_URL || '/api/photo_upload',
+        timeout: 60000 
+      })
     }
+  },
+  setup() {
+    const appStore = useAppStore()
+    return { appStore }
   },
   methods: {
     handleFileChange(file, fileList) {
-      this.fileList = fileList
+      this.fileList = fileList.filter(f => f.raw.size <= 50 * 1024 * 1024)
+      if (file.raw.size > 50 * 1024 * 1024) {
+        ElMessage.error(`Файл ${file.name} превышает максимальный размер 50MB.`)
+      }
     },
 
     handleFileRemove(file, fileList) {
@@ -80,77 +91,60 @@ export default {
       this.fileList = []
       this.uploadProgress = 0
       this.uploadedCount = 0
+      this.uploadStatus = ''
     },
-
+    
     async handleUpload() {
       if (this.fileList.length === 0) {
-        ElMessage.warning('Выберите файлы для загрузки')
+        ElMessage.warning('Пожалуйста, выберите файлы для загрузки')
         return
       }
 
       this.uploading = true
       this.uploadProgress = 0
       this.uploadedCount = 0
-      this.uploadStatus = null
+      this.uploadStatus = 'uploading'
+      
+      const results = []
 
       try {
-        const results = []
+        const formData = new FormData()
+        this.fileList.forEach(file => {
+          formData.append('files', file.raw, file.name)
+        })
 
-        for (let i = 0; i < this.fileList.length; i++) {
-          const file = this.fileList[i].raw
+        const response = await this.client.post('/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          },
+        })
+        
+        let apiBatchResults = response.data.results; 
+
+        // АВАРИЙНЫЙ МЕХАНИЗМ: Если ответ не является массивом, но содержит file_id
+        if (!Array.isArray(apiBatchResults)) {
+             if (response.data.file_id) {
+                 // Оборачиваем одиночный результат в формат, который ожидает цикл:
+                 apiBatchResults = [{ status: 'success', data: response.data, filename: response.data.filename }];
+             } else {
+                 apiBatchResults = []; 
+                 ElMessage.error("Некорректный формат ответа от API Gateway.");
+             }
+        }
+        
+        // Перебираем результаты
+        for (let i = 0; i < apiBatchResults.length; i++) {
+          const result = apiBatchResults[i]
           
-          try {
-            // Используем исправленный сервис
-            const result = await photoService.uploadPhoto(file)
-            
-            if (result.success) {
-              results.push({
-                file: file.name,
-                status: 'success',
-                data: result.data
-              })
-              
-              // Сразу эмитим событие обработки - БЕЗ ДОПОЛНИТЕЛЬНОГО processPhoto!
-              this.$emit('photo-processed', result.data)
-              ElMessage.success(`${file.name}: Найдено ${result.data.buildings_detected} зданий`)
-            } else {
-              results.push({
-                file: file.name,
-                status: 'error',
-                error: result.error
-              })
-              
-              // Эмитим результат с ошибкой
-              this.$emit('photo-processed', {
-                file_id: result.data?.file_id || file.name,
-                original_filename: file.name,
-                status: 'failed',
-                buildings_detected: 0,
-                error: result.error
-              })
-              ElMessage.error(`${file.name}: ${result.error}`)
-            }
-
-          } catch (error) {
-            console.error(`Upload error for ${file.name}:`, error)
-            const errorResult = {
-              file: file.name,
-              status: 'error',
-              error: error.message
-            }
-            results.push(errorResult)
-            
-            // Эмитим результат с ошибкой
-            this.$emit('photo-processed', {
-              file_id: file.name,
-              original_filename: file.name,
-              status: 'failed', 
-              buildings_detected: 0,
-              error: error.message
-            })
-            ElMessage.error(`${file.name}: ${error.message}`)
+          if (result.status === 'success') {
+            // result.data - это полный payload {"file_id":"...", "geocoding_result":{...}}
+            this.$emit('photo-processed', result.data) 
+          } else {
+            ElMessage.error(`Ошибка при обработке ${result.filename || 'файла'}: ${result.error}`)
           }
-
+          
+          results.push(result)
+          
           this.uploadedCount = i + 1
           this.uploadProgress = Math.round((this.uploadedCount / this.fileList.length) * 100)
         }
@@ -158,24 +152,27 @@ export default {
         // Итоги загрузки
         const successCount = results.filter(r => r.status === 'success').length
         if (successCount === this.fileList.length) {
-          ElMessage.success(`Все файлы успешно загружены и обработаны`)
           this.uploadStatus = 'success'
         } else {
-          ElMessage.warning(`Загружено ${successCount} из ${this.fileList.length} файлов`)
           this.uploadStatus = 'exception'
         }
 
         this.$emit('upload-complete', results)
 
       } catch (error) {
-        ElMessage.error(`Ошибка загрузки: ${error.message}`)
+        console.error("Upload error:", error)
+        const errorMessage = error.response?.data?.detail || error.message || 'Неизвестная ошибка'
+        ElMessage.error(`Ошибка загрузки: ${errorMessage}`)
         this.uploadStatus = 'exception'
       } finally {
         this.uploading = false
       }
+    },
+    
+    formatProgress(percentage) {
+      return `Загрузка: ${percentage}%`
     }
   }
-  // УДАЛЕН метод processPhoto - он больше не нужен
 }
 </script>
 
@@ -193,26 +190,13 @@ export default {
 .upload-progress {
   margin-top: 20px;
   padding: 20px;
-  background: #f8f9fa;
+  background: #f8f8f8;
   border-radius: 8px;
 }
 
-.progress-info {
-  text-align: center;
+.progress-text {
   margin-top: 10px;
-  color: #666;
-  font-size: 0.9em;
-}
-
-:deep(.el-upload-dragger) {
-  width: 100%;
-  height: 200px;
-  border: 2px dashed #409eff;
-  background: rgba(64, 158, 255, 0.05);
-}
-
-:deep(.el-upload-dragger:hover) {
-  border-color: #409eff;
-  background: rgba(64, 158, 255, 0.1);
+  text-align: center;
+  color: #606266;
 }
 </style>

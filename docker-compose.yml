@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL база данных
   postgres:
@@ -133,8 +131,12 @@ services:
       - DEBUG=${DEBUG}
       - UPLOAD_DIR=${UPLOAD_DIR}
       - MAX_FILE_SIZE=52428800
+      - CV_PROCESSING_SERVICE_URL=http://cv-processing-service:8002
+      - GEOCODING_SERVICE_URL=http://geocoding-service:8004
     depends_on:
       postgres:
+        condition: service_healthy
+      geocoding-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8003/health', timeout=2)"]
@@ -153,12 +155,19 @@ services:
       - "8004:8004"
     volumes:
       - ./backend/geocoding-service:/app
+      - ./storage:/app/storage
+      - ./data:/app/data
     environment:
       - PYTHONPATH=/app/src
       - DEBUG=${DEBUG}
       - GEONAMES_USERNAME=${GEONAMES_USERNAME}
       - OSM_NOMINATIM_URL=https://nominatim.openstreetmap.org
       - GEONAMES_URL=http://api.geonames.org
+      - ML_MODEL_PATH=${ML_MODEL_PATH}
+    # 🌟 КРИТИЧНОЕ ИСПРАВЛЕНИЕ: УКАЗЫВАЕМ ПУБЛИЧНЫЕ DNS-СЕРВЕРЫ
+    dns:
+      - 8.8.8.8  # Google Public DNS
+      - 1.1.1.1  # Cloudflare DNS
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,8 +192,10 @@ services:
       - PYTHONPATH=/app/src
       - DEBUG=${DEBUG}
       - EXPORT_DIR=/app/storage/exports
+    # ИСПРАВЛЕНО: используем service_healthy для надежности
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy 
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8005/health', timeout=2)"]
       interval: 30s

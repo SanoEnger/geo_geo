@@ -6,13 +6,11 @@
         <p>Загрузите фотографии для автоматического определения координат объектов</p>
       </div>
 
-      <!-- Компонент загрузки файлов -->
       <FileUpload 
         @upload-complete="handleUploadComplete"
         @photo-processed="handlePhotoProcessed"
       />
 
-      <!-- Результаты обработки -->
       <div v-if="processingResults.length > 0" class="results-section">
         <h2>Результаты обработки</h2>
         <div class="results-grid">
@@ -32,10 +30,12 @@
               <p>🏢 Найдено зданий: {{ result.buildings_detected }}</p>
               <p v-if="result.coordinates">📍 Координаты: {{ result.coordinates.lat }}, {{ result.coordinates.lng }}</p>
               <p v-if="result.address">🏠 Адрес: {{ result.address }}</p>
+              <p v-if="result.geocoding_note" class="note">ℹ️ **Нота:** {{ result.geocoding_note }}</p>
             </div>
 
             <div v-else class="no-buildings">
               <p>❌ Здания не обнаружены</p>
+              <p v-if="result.geocoding_note"><small>Нота геокодирования: {{ result.geocoding_note }}</small></p>
             </div>
           </div>
         </div>
@@ -69,11 +69,35 @@ export default {
       ElMessage.success(`Загрузка завершена! Обработано ${results.length} файлов`)
     },
 
-    handlePhotoProcessed(result) {
-      this.processingResults.unshift(result)
-      this.appStore.addProcessingResult(result)
+    handlePhotoProcessed(apiResult) {
+      const geocodingResult = apiResult.geocoding_result;
       
-      ElMessage.success(`Фото обработано! Найдено ${result.buildings_detected} зданий`)
+      // КРИТЕРИЙ УСПЕХА: Проверяем наличие объекта coordinates.
+      const isBuildingGeocoded = geocodingResult 
+          && geocodingResult.success === true 
+          && geocodingResult.coordinates
+          && typeof geocodingResult.coordinates.latitude === 'number'; // Дополнительная проверка типа
+          
+      const processedData = {
+          file_id: apiResult.file_id,
+          original_filename: apiResult.filename,
+          status: 'completed', 
+          
+          buildings_detected: isBuildingGeocoded ? 1 : 0, 
+          
+          coordinates: isBuildingGeocoded ? { 
+              lat: geocodingResult.coordinates.latitude.toFixed(4), 
+              lng: geocodingResult.coordinates.longitude.toFixed(4) 
+          } : null,
+          
+          address: geocodingResult.address || null,
+          geocoding_note: geocodingResult.note || null, 
+      };
+      
+      this.processingResults.unshift(processedData)
+      this.appStore.addProcessingResult(processedData)
+      
+      ElMessage.success(`Фото обработано! Найдено ${processedData.buildings_detected} зданий`)
     },
 
     getStatusType(status) {

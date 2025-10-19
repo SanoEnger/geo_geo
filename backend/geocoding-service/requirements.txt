@@ -4,3 +4,9 @@ python-multipart==0.0.6
 requests==2.31.0
 pydantic==2.5.0
 geopy==2.3.0
+Pillow
+httpx
+numpy
+torchvision
+
+torch==2.0.1 --index-url https://download.pytorch.org/whl/cpu

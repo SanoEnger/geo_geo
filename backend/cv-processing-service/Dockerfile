@@ -1,5 +1,8 @@
 FROM python:3.9-slim
 
+ENV PIP_DEFAULT_TIMEOUT=300
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 WORKDIR /app
 
 # Системные зависимости для OpenCV и YOLO (исправленная версия)
